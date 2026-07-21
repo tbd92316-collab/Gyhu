@@ -28,11 +28,11 @@ jobs:
 
       - name: Generate Android App Code Automatically
         run: |
-          # 1. Create Flutter Project
-          flutter create --org com.screencast --project-name screencast_app . --force
+          # 1. Create Flutter Project in a separate folder
+          flutter create --org com.screencast --project-name screencast_app screencast_app
 
           # 2. Add dependencies to pubspec.yaml
-          cat << 'EOF' > pubspec.yaml
+          cat << 'EOF' > screencast_app/pubspec.yaml
           name: screencast_app
           description: "Android Screen Casting App"
           publish_to: 'none'
@@ -57,7 +57,7 @@ jobs:
           EOF
 
           # 3. Add Android Permissions in AndroidManifest.xml
-          cat << 'EOF' > android/app/src/main/AndroidManifest.xml
+          cat << 'EOF' > screencast_app/android/app/src/main/AndroidManifest.xml
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
               <uses-permission android:name="android.permission.INTERNET"/>
               <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
@@ -93,7 +93,7 @@ jobs:
           EOF
 
           # 4. Create main.dart App UI with Screen Sharing & Cast Request Logic
-          cat << 'EOF' > lib/main.dart
+          cat << 'EOF' > screencast_app/lib/main.dart
           import 'package:flutter/material.dart';
           import 'package:flutter_webrtc/flutter_webrtc.dart';
 
@@ -203,13 +203,15 @@ jobs:
           EOF
 
       - name: Install Dependencies
+        working-directory: ./screencast_app
         run: flutter pub get
 
       - name: Build APK
+        working-directory: ./screencast_app
         run: flutter build apk --release
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: Android-ScreenCast-App
-          path: build/app/outputs/flutter-apk/app-release.apk
+          path: screencast_app/build/app/outputs/flutter-apk/app-release.apk
