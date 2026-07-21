@@ -1,0 +1,215 @@
+name: Build Android Screen Cast App (.apk)
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Java Development Kit (JDK 17)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Flutter SDK
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.19.x'
+          channel: 'stable'
+
+      - name: Generate Android App Code Automatically
+        run: |
+          # 1. Create Flutter Project
+          flutter create --org com.screencast --project-name screencast_app . --force
+
+          # 2. Add dependencies to pubspec.yaml
+          cat << 'EOF' > pubspec.yaml
+          name: screencast_app
+          description: "Android Screen Casting App"
+          publish_to: 'none'
+          version: 1.0.0+1
+
+          environment:
+            sdk: '>=3.0.0 <4.0.0'
+
+          dependencies:
+            flutter:
+              sdk: flutter
+            flutter_webrtc: ^0.9.48
+            socket_io_client: ^2.0.3+1
+
+          dev_dependencies:
+            flutter_test:
+              sdk: flutter
+            flutter_lints: ^3.0.0
+
+          flutter:
+            uses-material-design: true
+          EOF
+
+          # 3. Add Android Permissions in AndroidManifest.xml
+          cat << 'EOF' > android/app/src/main/AndroidManifest.xml
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET"/>
+              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION"/>
+
+              <application
+                  android:label="ScreenCast App"
+                  android:name="${applicationName}"
+                  android:icon="@mipmap/ic_launcher">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:launchMode="singleTop"
+                      android:theme="@style/LaunchTheme"
+                      android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+                      android:hardwareAccelerated="true"
+                      android:windowSoftInputMode="adjustResize">
+                      <meta-data
+                        android:name="io.flutter.embedding.android.NormalTheme"
+                        android:value="@style/NormalTheme"
+                        />
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+                  </activity>
+                  <meta-data
+                      android:name="flutterEmbedding"
+                      android:value="2" />
+              </application>
+          </manifest>
+          EOF
+
+          # 4. Create main.dart App UI with Screen Sharing & Cast Request Logic
+          cat << 'EOF' > lib/main.dart
+          import 'package:flutter/material.dart';
+          import 'package:flutter_webrtc/flutter_webrtc.dart';
+
+          void main() {
+            runApp(const ScreenCastApp());
+          }
+
+          class ScreenCastApp extends StatelessWidget {
+            const ScreenCastApp({super.key});
+
+            @override
+            Widget build(BuildContext context) {
+              return MaterialApp(
+                debugShowCheckedModeBanner: false,
+                title: 'Screen Cast',
+                theme: ThemeData.dark(),
+                home: const HomeScreen(),
+              );
+            }
+          }
+
+          class HomeScreen extends StatefulWidget {
+            const HomeScreen({super.key});
+
+            @override
+            State<HomeScreen> createState() => _HomeScreenState();
+          }
+
+          class _HomeScreenState extends State<HomeScreen> {
+            bool isCasting = false;
+            MediaStream? _localStream;
+
+            Future<void> _startCasting() async {
+              try {
+                final Map<String, dynamic> mediaConstraints = {
+                  'audio': false,
+                  'video': {
+                    'mandatory': {
+                      'minWidth': '640',
+                      'minHeight': '480',
+                      'minFrameRate': '30',
+                    },
+                    'facingMode': 'user',
+                    'optional': [],
+                  }
+                };
+
+                MediaStream stream = await navigator.mediaDevices.getDisplayMedia(mediaConstraints);
+                setState(() {
+                  _localStream = stream;
+                  isCasting = true;
+                });
+              } catch (e) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text("Error starting cast: $e")),
+                );
+              }
+            }
+
+            void _stopCasting() {
+              _localStream?.getTracks().forEach((track) => track.stop());
+              setState(() {
+                isCasting = false;
+                _localStream = null;
+              });
+            }
+
+            @override
+            Widget build(BuildContext context) {
+              return Scaffold(
+                appBar: AppBar(
+                  title: const Text('Android Screen Cast'),
+                  centerTitle: true,
+                ),
+                body: Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        isCasting ? Icons.cast_connected : Icons.cast,
+                        size: 100,
+                        color: isCasting ? Colors.green : Colors.grey,
+                      ),
+                      const SizedBox(height: 20),
+                      Text(
+                        isCasting ? "Casting Screen to PC..." : "Ready to Cast Screen",
+                        style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(height: 40),
+                      ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 15),
+                          backgroundColor: isCasting ? Colors.red : Colors.blue,
+                        ),
+                        onPressed: isCasting ? _stopCasting : _startCasting,
+                        child: Text(
+                          isCasting ? "Stop Casting" : "Start Casting",
+                          style: const TextStyle(fontSize: 18, color: Colors.white),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }
+          }
+          EOF
+
+      - name: Install Dependencies
+        run: flutter pub get
+
+      - name: Build APK
+        run: flutter build apk --release
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Android-ScreenCast-App
+          path: build/app/outputs/flutter-apk/app-release.apk
