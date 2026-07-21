@@ -92,7 +92,10 @@ jobs:
           </manifest>
           EOF
 
-          # 4. Create main.dart App UI with Screen Sharing & Cast Request Logic
+          # 4. Fix minSdkVersion for flutter_webrtc (Update to 21 automatically)
+          sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 21/g' screencast_app/android/app/build.gradle
+
+          # 5. Create main.dart App UI with Screen Sharing & Cast Request Logic
           cat << 'EOF' > screencast_app/lib/main.dart
           import 'package:flutter/material.dart';
           import 'package:flutter_webrtc/flutter_webrtc.dart';
