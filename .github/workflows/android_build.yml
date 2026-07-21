@@ -56,7 +56,7 @@ jobs:
             uses-material-design: true
           EOF
 
-          # 3. Add Android Permissions in AndroidManifest.xml
+          # 3. Add Android Permissions & Foreground Service in AndroidManifest.xml
           cat << 'EOF' > screencast_app/android/app/src/main/AndroidManifest.xml
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
               <uses-permission android:name="android.permission.INTERNET"/>
@@ -85,6 +85,13 @@ jobs:
                           <category android:name="android.intent.category.LAUNCHER"/>
                       </intent-filter>
                   </activity>
+
+                  <service
+                      android:name="com.cloudwebrtc.webrtc.FlutterWebRTCForegroundService"
+                      android:enabled="true"
+                      android:exported="false"
+                      android:foregroundServiceType="mediaProjection" />
+
                   <meta-data
                       android:name="flutterEmbedding"
                       android:value="2" />
@@ -92,13 +99,14 @@ jobs:
           </manifest>
           EOF
 
-          # 4. Fix minSdkVersion for flutter_webrtc (Update to 21 automatically)
+          # 4. Fix minSdkVersion for flutter_webrtc
           sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 21/g' screencast_app/android/app/build.gradle
 
-          # 5. Create main.dart App UI with Screen Sharing & Cast Request Logic
+          # 5. Create main.dart with PC IP Connection & Crash Fix
           cat << 'EOF' > screencast_app/lib/main.dart
           import 'package:flutter/material.dart';
           import 'package:flutter_webrtc/flutter_webrtc.dart';
+          import 'package:socket_io_client/socket_io_client.dart' as IO;
 
           void main() {
             runApp(const ScreenCastApp());
@@ -128,15 +136,62 @@ jobs:
           class _HomeScreenState extends State<HomeScreen> {
             bool isCasting = false;
             MediaStream? _localStream;
+            IO.Socket? socket;
+            RTCPeerConnection? peerConnection;
+            final TextEditingController _ipController = TextEditingController();
 
-            Future<void> _startCasting() async {
+            void _connectAndCast() async {
+              String ip = _ipController.text.trim();
+              if (ip.isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text("Please enter PC IP address")),
+                );
+                return;
+              }
+
+              try {
+                // Initialize Socket
+                socket = IO.io('http://$ip:5000', IO.OptionBuilder().setTransports(['websocket']).build());
+                
+                socket?.onConnect((_) {
+                  socket?.emit('request-cast');
+                });
+
+                socket?.on('cast-accepted', (_) async {
+                  await _startScreenCapture();
+                });
+
+                socket?.on('cast-declined', (_) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text("PC declined cast request")),
+                  );
+                });
+
+                socket?.on('webrtc-answer', (data) async {
+                  var answer = RTCSessionDescription(data['sdp'], data['type']);
+                  await peerConnection?.setRemoteDescription(answer);
+                });
+
+                socket?.on('webrtc-ice', (data) async {
+                  var candidate = RTCIceCandidate(data['candidate'], data['sdpMid'], data['sdpMLineIndex']);
+                  await peerConnection?.addCandidate(candidate);
+                });
+
+              } catch (e) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text("Connection Error: $e")),
+                );
+              }
+            }
+
+            Future<void> _startScreenCapture() async {
               try {
                 final Map<String, dynamic> mediaConstraints = {
                   'audio': false,
                   'video': {
                     'mandatory': {
-                      'minWidth': '640',
-                      'minHeight': '480',
+                      'minWidth': '1280',
+                      'minHeight': '720',
                       'minFrameRate': '30',
                     },
                     'facingMode': 'user',
@@ -145,19 +200,48 @@ jobs:
                 };
 
                 MediaStream stream = await navigator.mediaDevices.getDisplayMedia(mediaConstraints);
+                
                 setState(() {
                   _localStream = stream;
                   isCasting = true;
                 });
+
+                // Setup WebRTC Peer
+                Map<String, dynamic> configuration = {
+                  "iceServers": [{"urls": "stun:stun.l.google.com:19302"}]
+                };
+
+                peerConnection = await createPeerConnection(configuration);
+
+                _localStream?.getTracks().forEach((track) {
+                  peerConnection?.addTrack(track, _localStream!);
+                });
+
+                peerConnection?.onIceCandidate = (candidate) {
+                  socket?.emit('webrtc-ice', {
+                    'candidate': candidate.candidate,
+                    'sdpMid': candidate.sdpMid,
+                    'sdpMLineIndex': candidate.sdpMLineIndex,
+                  });
+                };
+
+                RTCSessionDescription offer = await peerConnection!.createOffer();
+                await peerConnection!.setLocalDescription(offer);
+
+                socket?.emit('webrtc-offer', {'sdp': offer.sdp, 'type': offer.type});
+
               } catch (e) {
+                _stopCasting();
                 ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text("Error starting cast: $e")),
+                  SnackBar(content: Text("Cast error: $e")),
                 );
               }
             }
 
             void _stopCasting() {
               _localStream?.getTracks().forEach((track) => track.stop());
+              peerConnection?.close();
+              socket?.disconnect();
               setState(() {
                 isCasting = false;
                 _localStream = null;
@@ -171,33 +255,41 @@ jobs:
                   title: const Text('Android Screen Cast'),
                   centerTitle: true,
                 ),
-                body: Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(
-                        isCasting ? Icons.cast_connected : Icons.cast,
-                        size: 100,
-                        color: isCasting ? Colors.green : Colors.grey,
-                      ),
-                      const SizedBox(height: 20),
-                      Text(
-                        isCasting ? "Casting Screen to PC..." : "Ready to Cast Screen",
-                        style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                      ),
-                      const SizedBox(height: 40),
-                      ElevatedButton(
-                        style: ElevatedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 15),
-                          backgroundColor: isCasting ? Colors.red : Colors.blue,
+                body: Padding(
+                  padding: const EdgeInsets.all(20.0),
+                  child: Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          isCasting ? Icons.cast_connected : Icons.cast,
+                          size: 100,
+                          color: isCasting ? Colors.green : Colors.grey,
                         ),
-                        onPressed: isCasting ? _stopCasting : _startCasting,
-                        child: Text(
-                          isCasting ? "Stop Casting" : "Start Casting",
-                          style: const TextStyle(fontSize: 18, color: Colors.white),
+                        const SizedBox(height: 20),
+                        if (!isCasting) ...[
+                          TextField(
+                            controller: _ipController,
+                            decoration: const InputDecoration(
+                              labelText: "Enter PC IP Address (e.g. 192.168.1.5)",
+                              border: OutlineInputBorder(),
+                            ),
+                          ),
+                          const SizedBox(height: 20),
+                        ],
+                        ElevatedButton(
+                          style: ElevatedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 15),
+                            backgroundColor: isCasting ? Colors.red : Colors.blue,
+                          ),
+                          onPressed: isCasting ? _stopCasting : _connectAndCast,
+                          child: Text(
+                            isCasting ? "Stop Casting" : "Start Casting",
+                            style: const TextStyle(fontSize: 18, color: Colors.white),
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
               );
