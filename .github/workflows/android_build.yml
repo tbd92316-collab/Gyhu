@@ -31,10 +31,10 @@ jobs:
           # 1. Create Flutter Project
           flutter create --org com.screencast --project-name screencast_app screencast_app
 
-          # 2. Add dependencies to pubspec.yaml
+          # 2. Add dependencies
           cat << 'EOF' > screencast_app/pubspec.yaml
           name: screencast_app
-          description: "Android Screen Casting App"
+          description: "Android Screen Casting App - HD 60FPS"
           publish_to: 'none'
           version: 1.0.0+1
 
@@ -56,7 +56,7 @@ jobs:
             uses-material-design: true
           EOF
 
-          # 3. Configure AndroidManifest.xml for Custom Service
+          # 3. AndroidManifest.xml
           cat << 'EOF' > screencast_app/android/app/src/main/AndroidManifest.xml
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
               <uses-permission android:name="android.permission.INTERNET"/>
@@ -87,7 +87,6 @@ jobs:
                       </intent-filter>
                   </activity>
 
-                  <!-- Custom Foreground Service -->
                   <service
                       android:name=".ScreenCastService"
                       android:enabled="true"
@@ -101,10 +100,10 @@ jobs:
           </manifest>
           EOF
 
-          # 4. Set minSdkVersion 21 in build.gradle
+          # 4. Set minSdkVersion 21
           sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 21/g' screencast_app/android/app/build.gradle
 
-          # 5. Create Custom Native ScreenCastService (Kotlin)
+          # 5. Native ScreenCastService.kt
           cat << 'EOF' > screencast_app/android/app/src/main/kotlin/com/screencast/screencast_app/ScreenCastService.kt
           package com.screencast.screencast_app
 
@@ -127,8 +126,8 @@ jobs:
                       manager.createNotificationChannel(channel)
                       
                       val notification = Notification.Builder(this, "cast_channel")
-                          .setContentTitle("Screen Casting Active")
-                          .setContentText("Your screen is being cast to PC")
+                          .setContentTitle("HD 60FPS Screen Casting Active")
+                          .setContentText("Your screen is live streaming in HD quality")
                           .setSmallIcon(android.R.drawable.ic_dialog_info)
                           .build()
                       
@@ -143,7 +142,7 @@ jobs:
           }
           EOF
 
-          # 6. Update MainActivity.kt to call our Custom Service
+          # 6. MainActivity.kt
           cat << 'EOF' > screencast_app/android/app/src/main/kotlin/com/screencast/screencast_app/MainActivity.kt
           package com.screencast.screencast_app
 
@@ -187,7 +186,7 @@ jobs:
           }
           EOF
 
-          # 7. Main Dart Code with Start and Stop Service logic
+          # 7. High-Bitrate High-FPS Dart Code
           cat << 'EOF' > screencast_app/lib/main.dart
           import 'package:flutter/material.dart';
           import 'package:flutter/services.dart';
@@ -205,7 +204,7 @@ jobs:
             Widget build(BuildContext context) {
               return MaterialApp(
                 debugShowCheckedModeBanner: false,
-                title: 'Screen Cast',
+                title: 'Screen Cast HD',
                 theme: ThemeData.dark(),
                 home: const HomeScreen(),
               );
@@ -270,25 +269,35 @@ jobs:
               }
             }
 
+            // Function to force High Bitrate (6 Mbps to 10 Mbps) on WebRTC SDP
+            String _setHighBitrate(String sdp) {
+              return sdp.replaceAllMapped(
+                RegExp(r'(m=video .*)'),
+                (match) => '${match.group(1)}\r\nb=AS:8000\r\nb=TIAS:8000000',
+              );
+            }
+
             Future<void> _startScreenCapture() async {
               try {
-                // Call Native Foreground Service BEFORE MediaProjection Request
                 try {
                   await platform.invokeMethod('startForeground');
                 } catch (e) {
                   debugPrint("Native service error: $e");
                 }
 
+                // HIGH QUALITY (1080p, 60 FPS) CONSTRAINTS
                 final Map<String, dynamic> mediaConstraints = {
                   'audio': false,
                   'video': {
                     'mandatory': {
-                      'minWidth': '1280',
-                      'minHeight': '720',
-                      'minFrameRate': '30',
+                      'minWidth': '1920',
+                      'minHeight': '1080',
+                      'minFrameRate': '60',
                     },
-                    'facingMode': 'user',
-                    'optional': [],
+                    'optional': [
+                      {'maxFrameRate': '60'},
+                      {'minFrameRate': '60'},
+                    ],
                   }
                 };
 
@@ -300,7 +309,8 @@ jobs:
                 });
 
                 Map<String, dynamic> configuration = {
-                  "iceServers": [{"urls": "stun:stun.l.google.com:19302"}]
+                  "iceServers": [{"urls": "stun:stun.l.google.com:19302"}],
+                  "sdpSemantics": "unified-plan"
                 };
 
                 peerConnection = await createPeerConnection(configuration);
@@ -318,9 +328,14 @@ jobs:
                 };
 
                 RTCSessionDescription offer = await peerConnection!.createOffer();
-                await peerConnection!.setLocalDescription(offer);
+                
+                // Inject High Bitrate into SDP
+                String highBitrateSdp = _setHighBitrate(offer.sdp!);
+                RTCSessionDescription modifiedOffer = RTCSessionDescription(highBitrateSdp, offer.type);
 
-                socket?.emit('webrtc-offer', {'sdp': offer.sdp, 'type': offer.type});
+                await peerConnection!.setLocalDescription(modifiedOffer);
+
+                socket?.emit('webrtc-offer', {'sdp': modifiedOffer.sdp, 'type': modifiedOffer.type});
 
               } catch (e) {
                 _stopCasting();
@@ -350,7 +365,7 @@ jobs:
             Widget build(BuildContext context) {
               return Scaffold(
                 appBar: AppBar(
-                  title: const Text('Android Screen Cast'),
+                  title: const Text('Android Screen Cast (1080p 60FPS)'),
                   centerTitle: true,
                 ),
                 body: Padding(
@@ -362,7 +377,7 @@ jobs:
                         Icon(
                           isCasting ? Icons.cast_connected : Icons.cast,
                           size: 100,
-                          color: isCasting ? Colors.green : Colors.grey,
+                          color: isCasting ? Colors.green : Colors.blueAccent,
                         ),
                         const SizedBox(height: 20),
                         if (!isCasting) ...[
@@ -382,7 +397,7 @@ jobs:
                           ),
                           onPressed: isCasting ? _stopCasting : _connectAndCast,
                           child: Text(
-                            isCasting ? "Stop Casting" : "Start Casting",
+                            isCasting ? "Stop Casting" : "Start HD Cast",
                             style: const TextStyle(fontSize: 18, color: Colors.white),
                           ),
                         ),
@@ -406,5 +421,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Android-ScreenCast-App
+          name: Android-ScreenCast-App-HD
           path: screencast_app/build/app/outputs/flutter-apk/app-release.apk
