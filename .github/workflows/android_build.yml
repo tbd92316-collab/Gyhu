@@ -57,7 +57,7 @@ jobs:
             uses-material-design: true
           EOF
 
-          # 3. AndroidManifest.xml (Permissions & Internet access)
+          # 3. AndroidManifest.xml
           cat << 'EOF' > global_chat_app/android/app/src/main/AndroidManifest.xml
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
               <uses-permission android:name="android.permission.INTERNET"/>
@@ -95,7 +95,7 @@ jobs:
           # 4. Set minSdkVersion 21
           sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 21/g' global_chat_app/android/app/build.gradle
 
-          # 5. Full Flutter Application Code
+          # 5. Fixed Flutter Application Code
           cat << 'EOF' > global_chat_app/lib/main.dart
           import 'dart:async';
           import 'dart:convert';
@@ -103,7 +103,6 @@ jobs:
           import 'package:flutter/material.dart';
           import 'package:network_info_plus/network_info_plus.dart';
           import 'package:path_provider/path_provider.dart';
-          import 'package:socket_io_client/socket_io_client.dart' as IO;
 
           void main() {
             runApp(const GlobalChatApp());
@@ -204,7 +203,7 @@ jobs:
                         if (name.isEmpty) return;
                         if (!isHost && _ipController.text.trim().isEmpty) return;
 
-                        Navigator.pop(context); // Close Dialog
+                        Navigator.pop(context);
                         
                         Navigator.push(
                           context,
@@ -291,11 +290,11 @@ jobs:
 
           class _ChatScreenState extends State<ChatScreen> {
             HttpServer? _rawServer;
-            IO.Socket? _clientSocket;
             List<Map<String, dynamic>> messages = [];
-            List<Socket> clientSockets = []; // For Host raw TCP/WS
             final TextEditingController _msgController = TextEditingController();
             File? _hiddenHistoryFile;
+            List<WebSocket> connectedClients = [];
+            WebSocket? _clientWs;
 
             @override
             void initState() {
@@ -307,7 +306,6 @@ jobs:
               }
             }
 
-            // ================= HOST LOGIC =================
             Future<void> _startLocalServer() async {
               try {
                 final dir = await getApplicationDocumentsDirectory();
@@ -337,16 +335,12 @@ jobs:
               }
             }
 
-            List<WebSocket> connectedClients = [];
-
             void _handleHostWebSocket(WebSocket socket) {
               connectedClients.add(socket);
 
               socket.listen((data) {
                 try {
                   var msg = jsonDecode(data.toString());
-                  
-                  // Broadcast message to all connected users
                   _broadcastMessage(msg);
                   _saveMessageToFile(msg);
 
@@ -375,19 +369,15 @@ jobs:
                   history.add(msg);
                   await _hiddenHistoryFile!.writeAsString(jsonEncode(history));
                 } catch (e) {
-                  debugPrint("Error saving to hidden file: $e");
+                  debugPrint("Error saving: $e");
                 }
               }
             }
-
-            // ================= CLIENT LOGIC =================
-            WebSocket? _clientWs;
 
             Future<void> _connectToServer() async {
               try {
                 _clientWs = await WebSocket.connect('ws://${widget.serverIp}:8080');
 
-                // Send join system message
                 var joinMsg = {
                   "sender": "System",
                   "text": "${widget.username} joined the chat",
@@ -418,12 +408,12 @@ jobs:
                 barrierDismissible: false,
                 builder: (context) => AlertDialog(
                   title: const Text("Server Disconnected"),
-                  content: const Text("Host destroy server"),
+                  content: const Text("Host destroyed server"),
                   actions: [
                     ElevatedButton(
                       onPressed: () {
-                        Navigator.pop(context); // Close Dialog
-                        Navigator.pop(context); // Back to Home
+                        Navigator.pop(context);
+                        Navigator.pop(context);
                       },
                       child: const Text("OK"),
                     )
@@ -482,7 +472,6 @@ jobs:
             @override
             void dispose() {
               if (widget.isHost) {
-                // Inform clients before destroying
                 for (var client in connectedClients) {
                   client.close();
                 }
@@ -495,8 +484,10 @@ jobs:
 
             @override
             Widget build(BuildContext context) {
-              return WillPopScope(
-                onWillPop: () async {
+              return PopScope(
+                canPop: false,
+                onPopInvoked: (didPop) async {
+                  if (didPop) return;
                   if (widget.isHost) {
                     bool confirm = await showDialog(
                       context: context,
@@ -509,9 +500,10 @@ jobs:
                         ],
                       ),
                     ) ?? false;
-                    return confirm;
+                    if (confirm && context.mounted) Navigator.pop(context);
+                  } else {
+                    Navigator.pop(context);
                   }
-                  return true;
                 },
                 child: Scaffold(
                   appBar: AppBar(
@@ -546,7 +538,7 @@ jobs:
                               );
                             }
 
-                            return Alignment(
+                            return Align(
                               alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
                               child: Container(
                                 margin: const EdgeInsets.symmetric(vertical: 4),
@@ -558,7 +550,14 @@ jobs:
                                 child: Column(
                                   crossAxisAlignment: isMe ? CrossAlignment.end : CrossAlignment.start,
                                   children: [
-                                    Text(m['sender'], style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: isMe ? Colors.white70 : Colors.blueLighten)),
+                                    Text(
+                                      m['sender'], 
+                                      style: TextStyle(
+                                        fontSize: 11, 
+                                        fontWeight: FontWeight.bold, 
+                                        color: isMe ? Colors.white70 : Colors.lightBlueAccent
+                                      )
+                                    ),
                                     const SizedBox(height: 4),
                                     Text(m['text'], style: const TextStyle(fontSize: 15, color: Colors.white)),
                                     const SizedBox(height: 2),
